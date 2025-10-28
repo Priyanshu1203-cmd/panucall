@@ -164,17 +164,14 @@
         let incomingCallOffer = null;
 
         
-        // WebRTC config - IMPROVED FOR CROSS-COUNTRY CONNECTIONS
+        // WebRTC config - SIMPLIFIED AND RELIABLE
 const config = {
     iceServers: [
-        // STUN servers (for direct connection)
+        // STUN servers
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' },
         
-        // TURN servers (for relay when direct fails) - CRITICAL FOR RUSSIA-INDIA
+        // RELIABLE TURN servers for Russia-India
         {
             urls: 'turn:openrelay.metered.ca:80',
             username: 'openrelayproject',
@@ -182,22 +179,11 @@ const config = {
         },
         {
             urls: 'turn:openrelay.metered.ca:443',
-            username: 'openrelayproject',
+            username: 'openrelayproject', 
             credential: 'openrelayproject'
-        },
-        {
-            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        },
-        {
-            urls: 'turn:global.turn.twilio.com:3478?transport=udp',
-            username: 'test',
-            credential: 'test123'
         }
-    ],
-    iceTransportPolicy: 'relay', // Force TURN for testing
-    iceCandidatePoolSize: 10
+    ]
+    // Remove iceTransportPolicy: 'relay' for now - let it auto-detect
 };
 
         // Initialize when page loads
@@ -262,21 +248,29 @@ const config = {
         }
 
         function makeCall() {
-            const targetId = callInput.value.trim();
-            if (!targetId) {
-                alert('Please enter a User ID');
-                return;
-            }
-            if (targetId === yourId) {
-                alert('Cannot call yourself');
-                return;
-            }
-            
-            console.log("Making call to:", targetId);
-            createPeerConnection();
-            callButton.disabled = true;
-            hangupButton.disabled = false;
-            updateStatus('Calling ' + targetId + '...', 'calling');
+    // SAFETY CHECK
+    if (!localStream) {
+        alert('Please start media first');
+        return;
+    }
+    
+    const targetId = callInput.value.trim();
+    if (!targetId) {
+        alert('Please enter a User ID');
+        return;
+    }
+    
+    console.log("Making call to:", targetId);
+    
+    // DOUBLE SAFETY CHECK
+    if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+    }
+    
+    createPeerConnection();
+    // ... rest of your code
+}
             
             // Add local tracks
             localStream.getTracks().forEach(track => {
@@ -304,22 +298,68 @@ const config = {
         }
 
         function createPeerConnection() {
-    peerConnection = new RTCPeerConnection(config);
+    console.log("Creating peer connection...");
     
-    // ADD THESE LINES FOR BETTER DEBUGGING:
-    peerConnection.oniceconnectionstatechange = () => {
-        console.log('ICE Connection State:', peerConnection.iceConnectionState);
-        updateStatus('ICE: ' + peerConnection.iceConnectionState, 'idle');
-    };
-    
-    peerConnection.onicegatheringstatechange = () => {
-        console.log('ICE Gathering State:', peerConnection.iceGatheringState);
-    };
-    
-    peerConnection.onsignalingstatechange = () => {
-        console.log('Signaling State:', peerConnection.signalingState);
-    };
-    
+    try {
+        // Create the peer connection
+        peerConnection = new RTCPeerConnection(config);
+        console.log("Peer connection created successfully");
+        
+        // ADD CONNECTION MONITORING
+        peerConnection.onconnectionstatechange = () => {
+            console.log('Connection state:', peerConnection.connectionState);
+            if (peerConnection.connectionState === 'connected') {
+                updateStatus('Call connected!', 'connected');
+            }
+        };
+        
+        peerConnection.oniceconnectionstatechange = () => {
+            console.log('ICE connection state:', peerConnection.iceConnectionState);
+            updateStatus('ICE: ' + peerConnection.iceConnectionState, 'idle');
+            
+            if (peerConnection.iceConnectionState === 'connected') {
+                updateStatus('Call connected! Media streaming...', 'connected');
+            }
+            if (peerConnection.iceConnectionState === 'failed') {
+                updateStatus('Connection failed - trying relay', 'disconnected');
+            }
+        };
+        
+        // Handle remote stream - FIXED WITH NULL CHECK
+        peerConnection.ontrack = (event) => {
+            console.log("Received remote track:", event.track.kind);
+            if (event.streams && event.streams[0]) {
+                remoteVideo.srcObject = event.streams[0];
+                console.log("Remote video stream set");
+                updateStatus('Call connected! Video & audio active', 'connected');
+            }
+        };
+        
+        // Handle ICE candidates
+        peerConnection.onicecandidate = (event) => {
+            if (event.candidate && peerConnection) {
+                const target = callInput.value.trim() || incomingCallFrom;
+                console.log("Sending ICE candidate to:", target);
+                socket.emit('ice-candidate', {
+                    candidate: event.candidate,
+                    target: target
+                });
+            }
+        };
+        
+        // Add local tracks if available
+        if (localStream) {
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+                console.log("Added local track:", track.kind);
+            });
+        }
+        
+    } catch (error) {
+        console.error("Error creating peer connection:", error);
+        alert('Error setting up call: ' + error.message);
+        resetButtons();
+    }
 }
             
             // Handle remote stream - SIMPLIFIED AND WORKING
